@@ -3,6 +3,10 @@ name = "mtg2f"
 version = "0.1.0"
 description = "Frontend application for mtg2"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
+license = "GPL-3.0-or-later"
 
-dependencies = []
+dependencies = [
+    "numpy>=2.4.2",
+    "requests>=2.32.5",
+]
