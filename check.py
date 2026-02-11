@@ -23,7 +23,23 @@ def check(custom_path: str | None = None) -> dict:
         logging.error('mtg2 is not found and the installation failed.')
         raise RuntimeError('mtg2 is not found and the installation failed.')
 
+    plink_path = check_plink()
+    if not plink_path:
+        logging.error('plink is not found.')
+        raise RuntimeError('plink is not found.')
+        ## TODO: Install plink to the app directory when failed to find plink
+    else:
+        rt['plink'] = plink_path
+
     return rt
+
+def check_plink() -> str | None:
+    plink_path = shutil.which('plink')
+    if plink_path:
+        logging.debug('plink is found at %s from PATH.', plink_path)
+        return plink_path
+    logging.debug('plink is not found on PATH.')
+    return None
 
 def check_mtg2(custom_path: str | None = None) -> str | None:
 
