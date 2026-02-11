@@ -2,6 +2,7 @@ import argparse
 import logging
 
 from converter import IlluminaReportConverter
+from check import check as check_dependencies
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -34,7 +35,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     common_option_parser.add_argument(
         '--verbose', '-V',
         action='store_true',
-        help='Enable verbose (VERBOSE) logging.',
+        help='Enable verbose (DEBUG) logging.',
     )
 
     convert_parser = subparsers.add_parser('convert',
@@ -83,6 +84,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help='Default phenotype value (default: -9 = missing).',
     )
 
+    check_parser = subparsers.add_parser('check',
+                                         help='Check and install mtg2 and plink dependencies',
+                                         parents=[common_option_parser])
+    check_parser.set_defaults(func=check)
+
+
     return parser.parse_args(argv)
 
 
@@ -98,9 +105,13 @@ def convert(args: argparse.Namespace) -> None:
         args.input, args.output, input_format=args.format
     )
 
-    print('\nDone! Output files:')
+    logging.info('Done! Output files:')
     for key, path in result.items():
-        print(f'  {key:>3}: {path}')
+        logging.info('  %3s: %s', key, path)
+
+def check(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose)
+    _ = check_dependencies(custom_path=None)
 
 
 
