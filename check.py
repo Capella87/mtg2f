@@ -55,14 +55,14 @@ def check_plink() -> str | None:
     # 2. Try to type "plink" command
     plink_path = shutil.which('plink')
     if plink_path:
-        logging.debug('plink is found at %s from PATH.', plink_path)
+        logging.info('plink is found at %s from PATH.', plink_path)
         return plink_path
     logging.debug('plink is not found on PATH.')
 
     # 3. Try to find plink file on the executable file's folder
     plink_path = _get_base_directory() / 'plink' if platform.system() != 'Windows' else _get_base_directory() / 'plink.exe'
     if plink_path.exists() and plink_path.is_file():
-        logging.debug('plink is found at %s from the app folder.', plink_path)
+        logging.info('plink is found at %s from the app folder.', plink_path)
         return str(plink_path)
     logging.debug('plink is not found on the app folder.')
 
@@ -118,7 +118,7 @@ def check_mtg2(custom_path: str | None = None) -> str | None:
     if custom_path:
         custom_path_obj = Path(custom_path)
         if custom_path_obj.exists() and custom_path_obj.is_file():
-            logging.debug('mtg2 is found on %s.', custom_path)
+            logging.info('mtg2 is found on %s.', custom_path)
             return str(custom_path_obj.resolve())
         else:
             logging.debug('Custom mtg2 path %s not found.', custom_path)
@@ -126,14 +126,14 @@ def check_mtg2(custom_path: str | None = None) -> str | None:
     # 2. Try to type "mtg2" command
     mtg2_path = shutil.which('mtg2')
     if mtg2_path:
-        logging.debug('mtg2 is found at %s from PATH.', mtg2_path)
+        logging.info('mtg2 is found at %s from PATH.', mtg2_path)
         return mtg2_path
     logging.debug('mtg2 is not found on PATH.')
 
     # 3. Try to find mtg2 file on the executable file's folder
     mtg2_path = _get_base_directory() / 'mtg2'
     if mtg2_path.exists() and mtg2_path.is_file():
-        logging.debug('mtg2 is found at %s from the app folder.', mtg2_path)
+        logging.info('mtg2 is found at %s from the app folder.', mtg2_path)
         return str(mtg2_path)
     logging.debug('mtg2 is not found on the app folder.')
     return None
