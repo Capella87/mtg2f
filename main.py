@@ -1,5 +1,6 @@
 import argparse
 import logging
+import platform
 
 from converter import IlluminaReportConverter
 from check import check as check_dependencies
@@ -116,6 +117,10 @@ def check(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    if platform.machine() not in ['x86_64', 'AMD64']:
+        logging.error('Unsupported architecture: %s. mtg2f only supports x86_64/AMD64.', platform.machine())
+        return
+
     args = parse_args(argv)
     if args.command is None:
         parse_args(['--help'])
