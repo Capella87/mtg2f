@@ -26,10 +26,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         '--version',
         action='version',
         help='Show program version and exit.',
-        version='mtg2f 1.0.0',
+        version='mtg2f 0.1.0',
     )
 
-    subparsers = parser.add_subparsers(dest='command', help=None, required=True)
+    subparsers = parser.add_subparsers(dest='command', help=None)
 
     common_option_parser = argparse.ArgumentParser(add_help=False)
     common_option_parser.add_argument(
@@ -117,6 +117,9 @@ def check(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.command is None:
+        parse_args(['--help'])
+        return
     args.func(args)
 
 if __name__ == '__main__':
