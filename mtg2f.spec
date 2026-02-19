@@ -8,7 +8,7 @@ conv = os.path.join(current_dir, 'converter')
 a = Analysis(
     ['main.py'],
     pathex=[current_dir, conv],
-    binaries=[],1
+    binaries=[],
     datas=[],
     hiddenimports=[],
     hookspath=[],
