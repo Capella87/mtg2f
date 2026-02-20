@@ -50,6 +50,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     convert_parser.add_argument(
         'output',
         help='Output prefix (creates <prefix>.map, <prefix>.ped, <prefix>_id.txt).',
+        default=None,
     )
     convert_parser.add_argument(
         '-f', '--format',
@@ -102,13 +103,23 @@ def convert(args: argparse.Namespace) -> None:
         sex=args.sex,
         phenotype=args.phenotype,
     )
-    result = converter.convert_file(
-        args.input, args.output, input_format=args.format
-    )
 
-    logging.info('Done! Output files:')
-    for key, path in result.items():
-        logging.info('  %3s: %s', key, path)
+    output_title = args.output
+    if not output_title:
+        output_title = f'{args.input}_output'
+
+    result = converter.convert_geno_file(
+        args.input, output_title, input_format=args.format
+    )
+    logging.info('Conversion to geno txt file is completed. Saved as %s on %s', result.stem, str(result.absolute()))
+
+    # Conversion to plink files
+    plink_format_conversion_result = converter.convert_file(
+        args.input, output_title, input_format=args.format)
+
+    logging.info('Conversion to plink files is completed. PLINK output files:')
+    for key, path in plink_format_conversion_result.items():
+        logging.info('%3s: %s', key, path)
 
 def check(args: argparse.Namespace) -> None:
     setup_logging(args.verbose)
