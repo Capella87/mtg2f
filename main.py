@@ -113,8 +113,30 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                                          parents=[common_option_parser])
     check_parser.set_defaults(func=check)
 
+    prepare_parser = subparsers.add_parser('prepare',
+                                           help='Run PLINK QC pipeline for the converted files.',
+                                           parents=[common_option_parser])
+    prepare_parser.add_argument('input',
+                                help='Input prefix of the converted PLINK files to run QC on (e.g. <prefix>).')
+    prepare_parser.add_argument('output',
+                                help='Output prefix of the converted PLINK files to run QC on (e.g. <prefix>_final). In default, the output files will be saved with the same prefix as the input files with "_final" suffix.',
+                                default=None)
+
+    prepare_parser.set_defaults(func=prepare)
+
+
 
     return parser.parse_args(argv)
+
+
+def prepare(args: argparse.Namespace) -> None:
+    setup_logging(args.verbose, log_file=args.log)
+    dep_paths = check_dependencies(custom_path=None)
+
+    plink_runner = PlinkRunner(name_prefix=args.input, plink_path=dep_paths['plink'], working_dir='.',
+                               output_name_prefix=args.output)
+    plink_runner.run()
+    return
 
 
 def convert(args: argparse.Namespace) -> None:
