@@ -4,16 +4,32 @@ import platform
 
 from converter import IlluminaReportConverter
 from check import check as check_dependencies
+from runners.plinkrunner import PlinkRunner
 
 
-def setup_logging(verbose: bool = False) -> None:
+def setup_logging(verbose: bool = False, log_file: str | None = None) -> None:
     """Configure root logger with console output."""
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format='%(levelname)s: %(message)s',
-        handlers=[logging.StreamHandler()],
+
+    console_formatter = logging.Formatter('%(levelname)s: %(message)s')
+    file_formatter = logging.Formatter(
+        '%(asctime)s %(levelname)s [%(filename)s:%(lineno)d] %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S %z'
     )
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(console_formatter)
+    handlers: list[logging.Handler] = [console_handler]
+
+    if log_file:
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(file_formatter)
+        handlers.append(file_handler)
+
+    root = logging.getLogger()
+    root.setLevel(level)
+    for handler in handlers:
+        root.addHandler(handler)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -37,6 +53,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         '--verbose', '-V',
         action='store_true',
         help='Enable verbose (DEBUG) logging.',
+    )
+    common_option_parser.add_argument(
+        '--log',
+        action='store',
+        help='Path to a log file to save log. In default, logs are only printed to console.',
     )
 
     convert_parser = subparsers.add_parser('convert',
@@ -97,7 +118,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def convert(args: argparse.Namespace) -> None:
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, log_file=args.log)
     converter = IlluminaReportConverter(
         missing_genotype=args.missing,
         min_genotype_count=args.min_count,
@@ -123,7 +144,7 @@ def convert(args: argparse.Namespace) -> None:
         logging.info('%3s: %s', key, path)
 
 def check(args: argparse.Namespace) -> None:
-    setup_logging(args.verbose)
+    setup_logging(args.verbose, log_file=args.log)
     _ = check_dependencies(custom_path=None)
 
 
