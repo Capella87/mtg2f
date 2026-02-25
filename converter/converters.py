@@ -484,61 +484,120 @@ class IlluminaReportConverter(Converter):
     #  Convenience: read + convert + write in one call
     # ==================================================================
 
-    def convert_to_plink_format_files
-
     def convert_file(
         self,
         input_file: str | os.PathLike,
         output_prefix: str | os.PathLike,
-        input_format: str = 'illumina',
     ) -> dict[str, Path]:
-        """Read a genotype file and write PLINK .map/.ped files.
+        """Convert a geno.txt file to PLINK .map / .ped files.
+
+        The input is a geno.txt file (produced by :meth:`convert_geno_file`)
+        in wide format::
+
+            snp    chr  pos  Sample1  Sample2  …
+            rs123  1    100  AA       AG       …
+
+        Missing genotypes are represented as ``NN``.
+
+        Output files (derived from *output_prefix*)::
+
+            <prefix>.map    — PLINK MAP file
+            <prefix>.ped    — PLINK PED file
+            <prefix>_id.txt — one individual ID per line
 
         Args:
-            input_file: Path to the input genotype file.
-            output_prefix: Prefix for output files.  Creates
-                ``<prefix>.map``, ``<prefix>.ped``, ``<prefix>_id.txt``.
-            input_format: ``'illumina'`` for Illumina Final Report or
-                ``'wide'`` for wide-format (SNP-major) files.
+            input_file: Path to the geno.txt file.
+            output_prefix: Base path for output files.
 
         Returns:
-            Dictionary mapping ``'map'``, ``'ped'``, ``'id'`` to output
-            :class:`~pathlib.Path` objects.
+            ``{'map': Path, 'ped': Path, 'id': Path}`` pointing to the
+            written output files.
         """
         start = time.perf_counter()
         input_path = Path(input_file)
-        output_prefix = Path(output_prefix)
+        prefix = Path(output_prefix)
 
-        # Read
-        if input_format == 'illumina':
-            df = self.read_illumina_report(input_path)
-        # elif input_format == 'wide':
-        #     df = self.read_wide_format(input_path)
-        else:
-            raise ValueError(
-                f'Unknown input_format \'{input_format}\'. '
-                f'Use \'illumina\' or \'wide\'.'
+        map_path = prefix.with_suffix('.map')
+        ped_path = prefix.with_suffix('.ped')
+        id_path = Path(f'{prefix}_id.txt')
+
+        missing_geno = 'NN'  # geno.txt always uses NN for missing
+        sex = str(self.default_sex)
+        phe = str(self.default_phenotype)
+
+        with open(input_path, 'r', encoding='utf-8') as in_f:
+            # --- Header: extract individual IDs ---
+            header = in_f.readline().strip().split('\t')
+            individuals = header[3:]  # skip snp, chr, pos
+            n_ind = len(individuals)
+            logger.info('Found %d individuals.', n_ind)
+
+            # Per-individual genotype accumulator
+            mk_id_dict: dict[str, list[str]] = {ind: [] for ind in individuals}
+
+            map_lines: list[str] = []
+            snp_count = 0
+
+            for raw_line in in_f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+                snp_count += 1
+                parts = line.split('\t')
+                snp_id, chr_num, pos = parts[0], parts[1], parts[2]
+                genotypes = parts[3:]
+
+                # --- Biallelic validation (warn and continue) ---
+                allele_check: set[str] = set()
+                for i, geno in enumerate(genotypes):
+                    if geno == missing_geno:
+                        formatted = '0\t0'
+                    else:
+                        a1, a2 = geno[0], geno[1]
+                        formatted = f'{a1}\t{a2}'
+                        allele_check.add(a1)
+                        allele_check.add(a2)
+                    mk_id_dict[individuals[i]].append(formatted)
+
+                if len(allele_check) > 2:
+                    logger.warning(
+                        "SNP '%s' has more than 2 alleles: %s",
+                        snp_id,
+                        sorted(allele_check),
+                    )
+
+                # --- MAP line ---
+                chr_label = 'XY' if chr_num == 'PseudoX' else chr_num
+                map_lines.append(f'{chr_label}\t{snp_id}\t0\t{pos}')
+
+        logger.info('Processed %d SNPs.', snp_count)
+
+        # --- Write MAP ---
+        self._write_lines(map_lines, map_path, label='MAP')
+
+        # --- Write PED ---
+        ped_lines: list[str] = []
+        for ind in individuals:
+            geno_str = '\t'.join(mk_id_dict[ind])
+            ped_lines.append(
+                f'{ind}\t{ind}\t0\t0\t{sex}\t{phe}\t{geno_str}'
             )
+        self._write_lines(ped_lines, ped_path, label='PED')
 
-        # Convert
-        result = self.convert(df)
-
-        # Write
-        map_path = output_prefix.with_suffix('.map')
-        ped_path = output_prefix.with_suffix('.ped')
-        id_path = Path(f'{output_prefix}_id.txt')
-
-        self._write_lines(result['map'], map_path, label='MAP')
-        self._write_lines(result['ped'], ped_path, label='PED')
-        self._write_ids(result['individuals'], id_path)
+        # --- Write individual IDs ---
+        self._write_ids(individuals, id_path)
 
         elapsed = time.perf_counter() - start
-        logger.info('Conversion completed in %.2f seconds.', elapsed)
-        logger.info('  MAP : %s  (%d SNPs)', map_path, len(result['map']))
-        logger.info('  PED : %s  (%d individuals)', ped_path, len(result['ped']))
-        logger.info('  IDs : %s', id_path)
+        logger.info('File conversion completed in %.2f seconds.', elapsed)
+        logger.info('  MAP: %s  (%d SNPs)', map_path, snp_count)
+        logger.info('  PED: %s  (%d individuals)', ped_path, n_ind)
 
-        return {'map': map_path, 'ped': ped_path, 'id': id_path}
+        return {
+            'map': map_path,
+            'ped': ped_path,
+            'id': id_path,
+        }
+
 
     def convert_geno_file(
         self,
@@ -546,7 +605,7 @@ class IlluminaReportConverter(Converter):
         output_file: str | os.PathLike,
         input_format: str = 'illumina',
     ) -> Path:
-        """Read a genotype file and write a geno.txt file.
+        """Read a final report text file containing genotype data and write a geno.txt file.
 
         The output is a SNP-major wide table sorted by chromosome (1–29)
         then position::

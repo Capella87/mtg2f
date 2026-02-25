@@ -46,6 +46,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     convert_parser.add_argument(
         'input',
         help='Path to the input genotype file.',
+        default=None,
     )
     convert_parser.add_argument(
         'output',
@@ -113,9 +114,9 @@ def convert(args: argparse.Namespace) -> None:
     )
     logging.info('Conversion to geno txt file is completed. Saved as %s on %s', result.stem, str(result.absolute()))
 
-    # Conversion to plink files
+    # Conversion to plink files (from geno.txt)
     plink_format_conversion_result = converter.convert_file(
-        args.input, output_title, input_format=args.format)
+        result, output_title)
 
     logging.info('Conversion to plink files is completed. PLINK output files:')
     for key, path in plink_format_conversion_result.items():
