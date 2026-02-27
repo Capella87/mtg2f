@@ -36,7 +36,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         prog='mtg2f',
-        description='mtg2f \u2014 Convert genotype files to PLINK format',
+        description='mtg2f \u2014 Convert genotype files to PLINK format and run QC pipeline with MTG2.',
     )
 
     parser.add_argument(
