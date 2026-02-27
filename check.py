@@ -53,7 +53,9 @@ def check(custom_path: str | None = None) -> dict:
 
 def check_plink() -> str | None:
     # 2. Try to type "plink" command
-    plink_path = shutil.which('plink')
+
+    command = 'plink1.9' if platform.system() == 'Linux' else 'plink'
+    plink_path = shutil.which(command)
     if plink_path:
         logging.info('plink is found at %s from PATH.', plink_path)
         return plink_path
