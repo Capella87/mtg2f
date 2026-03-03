@@ -1,9 +1,11 @@
 import argparse
 import logging
+from pathlib import Path
 import platform
 
 from converter import IlluminaReportConverter
 from check import check as check_dependencies
+from runners.mtg2runner import Mtg2Runner
 from runners.plinkrunner import PlinkRunner
 
 
@@ -76,10 +78,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     convert_parser.add_argument(
         '-f', '--format',
-        choices=['illumina', 'wide'],
+        choices=['illumina', 'wide', 'genotype'],
         default='illumina',
-        help='Input format: \'illumina\' (Final Report, default) or \'wide\' '
-             '(SNP-major tab-delimited).',
+        help='Input format: \'illumina\' (Final Report, default), \'wide\' '
+             '(SNP-major tab-delimited), or \'genotype\' (genotype file).',
     )
     convert_parser.add_argument(
         '--missing',
@@ -136,6 +138,9 @@ def prepare(args: argparse.Namespace) -> None:
     plink_runner = PlinkRunner(name_prefix=args.input, plink_path=dep_paths['plink'], working_dir='.',
                                output_name_prefix=args.output)
     plink_runner.run()
+
+    mtg2_runner = Mtg2Runner(name_prefix=args.input, mtg2_path=dep_paths['mtg2'], working_dir='.', output_name_prefix=args.output)
+    mtg2_runner.create_grm_file()
     return
 
 
@@ -152,10 +157,14 @@ def convert(args: argparse.Namespace) -> None:
     if not output_title:
         output_title = f'{args.input}_output'
 
-    result = converter.convert_geno_file(
-        args.input, output_title, input_format=args.format
-    )
-    logging.info('Conversion to geno txt file is completed. Saved as %s on %s', result.stem, str(result.absolute()))
+    if args.format != 'genotype':
+        result = converter.convert_geno_file(
+            args.input, output_title, input_format=args.format
+        )
+        logging.info('Conversion to geno txt file is completed. Saved as %s on %s', result.stem, str(result.absolute()))
+    else:
+        result = Path(args.input).absolute()
+        logging.info('Input file is in genotype format. Skipping conversion to geno txt file. Using input file directly: %s', str(result.absolute()))
 
     # Conversion to plink files (from geno.txt)
     plink_format_conversion_result = converter.convert_file(
