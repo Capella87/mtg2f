@@ -6,7 +6,7 @@ current_dir = os.getcwd()
 conv = os.path.join(current_dir, 'converter')
 
 a = Analysis(
-    ['main.py'],
+    ['main.py', 'config.py'],
     pathex=[current_dir, conv],
     binaries=[],
     datas=[],
