@@ -33,7 +33,7 @@ def open_settings(path: Path) -> TOMLDocument:
         configdoc['plink'] = conf.plink
 
         logger.debug('Creating default configuration file at %s with content:\n%s', path, dumps(configdoc))
-        with open(path, 'w', encoding='utf-8') as f:
+        with open(path, 'w', encoding='utf-8', newline='\n') as f:
             f.write(dumps(configdoc))
         return configdoc
     else:
@@ -52,5 +52,5 @@ def load_settings(path: Path | None = None) -> TOMLDocument:
 def write_settings(doc: TOMLDocument, path: Path) -> None:
     path = path.absolute()
     logger.debug('Writing configuration to %s with content:\n%s', path, dumps(doc))
-    with open(path, 'w', encoding='utf-8') as f:
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
         f.write(dumps(doc))
