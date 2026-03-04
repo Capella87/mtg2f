@@ -3,10 +3,12 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any, Tuple, override
 
+import gc
 import logging
 import os
 import time
 
+import numpy as np
 import pandas as pd
 
 from .quality_control import check_genotype_count, validate_biallelic
@@ -128,8 +130,26 @@ class IlluminaReportConverter(Converter):
             self.report_headers, nextline = self._read_report_headers(f, nextline)
             self.data_headers, nextline = self._read_data_headers(f, nextline)
 
+        col = self.column_map
+        needed = set(col.values())
+        dtype_map: dict[str, str] = {}
+        for h in self.data_headers:
+            if h in needed:
+                if h in (col['snp_name'], col['sample_id'],
+                         col['allele1'], col['allele2']):
+                    dtype_map[h] = 'category'
+                else:
+                    dtype_map[h] = 'str'
+
+        usecols = [h for h in self.data_headers if h in needed]
+
         df = pd.read_csv(
-            filepath, sep='\t', skiprows=nextline, names=list(self.data_headers)
+            filepath,
+            sep='\t',
+            skiprows=nextline,
+            names=list(self.data_headers),
+            usecols=usecols,
+            dtype=dtype_map,
         )
         logger.info(
             'Read Illumina report: %d rows, %d columns.', len(df), len(df.columns)
@@ -159,6 +179,14 @@ class IlluminaReportConverter(Converter):
         chr_col = col['chromosome']
         pos_col = col['position']
 
+        # Use columnar lists instead of list-of-dicts to reduce memory
+        snp_names: list[str] = []
+        sample_ids: list[str] = []
+        allele1s: list[str] = []
+        allele2s: list[str] = []
+        chromosomes: list[str] = []
+        positions: list[str] = []
+
         with open(filepath, 'r', encoding='utf-8') as fh:
             header_line = fh.readline().rstrip('\n')
             header = header_line.split('\t')
@@ -170,7 +198,6 @@ class IlluminaReportConverter(Converter):
                     'Expected: SNP_id\\tchr\\tposition\\tInd1\\tInd2\\t…'
                 )
 
-            rows: list[dict] = []
             for line_num, raw_line in enumerate(fh, start=2):
                 line = raw_line.rstrip('\n')
                 if not line:
@@ -196,24 +223,136 @@ class IlluminaReportConverter(Converter):
                         a1, a2 = geno[0], geno[1]
                     else:
                         a1, a2 = self.missing_genotype, self.missing_genotype
-                    rows.append(
-                        {
-                            snp_col: snp_id,
-                            sample_col: ind_id,
-                            a1_col: a1,
-                            a2_col: a2,
-                            chr_col: chromosome,
-                            pos_col: position,
-                        }
-                    )
+                    snp_names.append(snp_id)
+                    sample_ids.append(ind_id)
+                    allele1s.append(a1)
+                    allele2s.append(a2)
+                    chromosomes.append(chromosome)
+                    positions.append(position)
 
-        df = pd.DataFrame(rows)
+        # Build DataFrame with categorical dtypes for repeated strings
+        df = pd.DataFrame({
+            snp_col: pd.Categorical(snp_names),
+            sample_col: pd.Categorical(sample_ids),
+            a1_col: pd.Categorical(allele1s),
+            a2_col: pd.Categorical(allele2s),
+            chr_col: chromosomes,
+            pos_col: positions,
+        })
+        # Free the raw lists
+        del snp_names, sample_ids, allele1s, allele2s, chromosomes, positions
+
         logger.info(
             'Read wide-format file: %d rows (long), %d columns.',
             len(df),
             len(df.columns),
         )
         return df
+
+    # ---- 3. Direct wide-format → geno (no long-format round-trip) ----
+
+    def _convert_wide_to_geno_file(
+        self,
+        input_path: Path,
+        output_path: Path,
+    ) -> Path:
+        """Convert a wide-format file directly to geno.txt.
+
+        Avoids the expensive wide → long → wide round-trip by reading the
+        wide file, performing QC, sorting by chromosome/position, and
+        writing the geno.txt output in a single streaming pass.
+
+        Returns:
+            Path to the written geno.txt file.
+        """
+        col = self.column_map
+        missing_geno = self.missing_genotype + self.missing_genotype
+
+        with open(input_path, 'r', encoding='utf-8') as fh:
+            header_line = fh.readline().rstrip('\n')
+            header_parts = header_line.split('\t')
+            individuals = header_parts[3:]
+            n_ind = len(individuals)
+
+            if not individuals:
+                raise ValueError(
+                    'No individual columns found in the header. '
+                    'Expected: SNP_id\\tchr\\tposition\\tInd1\\tInd2\\t…'
+                )
+
+            # Collect SNP rows: (chr_int, pos_int, snp_id, genotypes_list)
+            snp_rows: list[tuple[int, int, str, list[str]]] = []
+
+            for line_num, raw_line in enumerate(fh, start=2):
+                line = raw_line.rstrip('\n')
+                if not line:
+                    continue
+                parts = line.split('\t')
+                if len(parts) < 4:
+                    logger.warning('Skipping malformed line %d.', line_num)
+                    continue
+
+                snp_id = parts[0]
+                chr_str = parts[1]
+                pos_str = parts[2]
+                genotypes = parts[3:]
+
+                if len(genotypes) != n_ind:
+                    raise ValueError(
+                        f'Line {line_num}: expected {n_ind} '
+                        f'genotypes, got {len(genotypes)}.'
+                    )
+
+                # Filter to numeric chromosomes 1–29
+                try:
+                    c_int = int(chr_str)
+                    p_int = int(pos_str)
+                except (ValueError, TypeError):
+                    continue
+                if not (1 <= c_int <= 29):
+                    continue
+
+                # Normalise genotypes: 2-char or missing
+                normalised: list[str] = []
+                for geno in genotypes:
+                    if len(geno) == 2:
+                        if geno == missing_geno or self.missing_genotype in geno:
+                            normalised.append('NN')
+                        else:
+                            normalised.append(geno)
+                    else:
+                        normalised.append('NN')
+
+                # QC
+                normalised = check_genotype_count(
+                    normalised, 'NN', snp_id, self.min_genotype_count,
+                )
+                validate_biallelic(
+                    normalised, 'NN', snp_id, line_num,
+                )
+
+                snp_rows.append((c_int, p_int, snp_id, normalised))
+
+        logger.info(
+            'Read wide-format: %d SNPs retained (chr 1–29), %d individuals.',
+            len(snp_rows), n_ind,
+        )
+
+        # Sort by chromosome then position
+        snp_rows.sort(key=lambda x: (x[0], x[1]))
+
+        # Write geno.txt
+        samples_header = '\t'.join(individuals)
+        with open(output_path, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(f'snp\tchr\tpos\t{samples_header}\n')
+            for c_int, p_int, snp_id, genos in snp_rows:
+                geno_str = '\t'.join(genos)
+                fh.write(f'{snp_id}\t{c_int}\t{p_int}\t{geno_str}\n')
+
+        del snp_rows
+        gc.collect()
+
+        return output_path
 
     # ==================================================================
     #  Convert: normalised long-format DataFrame → PLINK MAP / PED
@@ -282,25 +421,24 @@ class IlluminaReportConverter(Converter):
                 chrom = 'XY'
             map_lines.append(f'{chrom}\t{row[snp_col]}\t0\t{row[pos_col]}')
 
-        # --- Build combined genotype column ---
-        data = data.copy()
-        data['_geno'] = data[a1_col].astype(str) + data[a2_col].astype(str)
+        # --- Build genotype Series without copying the whole DataFrame ---
+        geno_series = data[a1_col].astype(str) + data[a2_col].astype(str)
 
         # --- QC per SNP ---
         snp_to_index = {s: i for i, s in enumerate(snp_order)}
         ind_to_index = {s: i for i, s in enumerate(individuals)}
         missing_geno = self.missing_genotype + self.missing_genotype
 
-        # Pre-allocate: geno_matrix[individual_idx][snp_idx]
-        geno_matrix: list[list[str]] = [
-            ['0\t0'] * n_snps for _ in range(n_ind)
-        ]
+        # Pre-allocate numpy arrays: allele1[ind_idx, snp_idx], allele2[...]
+        allele1_mat = np.full((n_ind, n_snps), '0', dtype='U1')
+        allele2_mat = np.full((n_ind, n_snps), '0', dtype='U1')
 
         # Group by SNP for QC and filling
-        for snp_name, grp in data.groupby(snp_col, sort=False):
+        grouped = data.groupby(snp_col, sort=False)
+        for snp_name, grp_idx in grouped.groups.items():
             snp_idx = snp_to_index[snp_name]
-            geno_list = grp['_geno'].tolist()
-            sample_ids = grp[sample_col].tolist()
+            geno_list = geno_series.iloc[grp_idx].tolist()
+            sample_ids = data[sample_col].iloc[grp_idx].tolist()
 
             # QC: check genotype counts
             geno_list = check_genotype_count(
@@ -318,24 +456,35 @@ class IlluminaReportConverter(Converter):
             for sample_id, geno in zip(sample_ids, geno_list):
                 ind_idx = ind_to_index[sample_id]
                 if geno == missing_geno or self.missing_genotype in geno:
-                    geno_matrix[ind_idx][snp_idx] = '0\t0'
+                    pass  # already '0'
                 else:
                     if len(geno) != 2:
                         raise ValueError(
                             f'Unexpected genotype \'{geno}\' for SNP '
                             f'\'{snp_name}\', sample \'{sample_id}\'.'
                         )
-                    geno_matrix[ind_idx][snp_idx] = f'{geno[0]}\t{geno[1]}'
+                    allele1_mat[ind_idx, snp_idx] = geno[0]
+                    allele2_mat[ind_idx, snp_idx] = geno[1]
+
+        del geno_series, grouped
+        gc.collect()
 
         # --- Build PED lines ---
         sex = str(self.default_sex)
         phe = str(self.default_phenotype)
         ped_lines: list[str] = []
         for i, ind_id in enumerate(individuals):
-            geno_str = '\t'.join(geno_matrix[i])
+            parts: list[str] = []
+            for j in range(n_snps):
+                parts.append(allele1_mat[i, j])
+                parts.append(allele2_mat[i, j])
+            geno_str = '\t'.join(parts)
             ped_lines.append(
                 f'{ind_id}\t{ind_id}\t0\t0\t{sex}\t{phe}\t{geno_str}'
             )
+
+        del allele1_mat, allele2_mat
+        gc.collect()
 
         return {
             'map': map_lines,
@@ -391,9 +540,6 @@ class IlluminaReportConverter(Converter):
         chr_col = col['chromosome']
         pos_col = col['position']
 
-        # --- Build combined genotype column ---
-        data = data.copy()
-        data['_geno'] = data[a1_col].astype(str) + data[a2_col].astype(str)
         missing_geno = self.missing_genotype + self.missing_genotype
 
         # --- Unique individuals (preserve file order) ---
@@ -410,18 +556,21 @@ class IlluminaReportConverter(Converter):
         n_snps = len(snp_info)
         logger.info('Found %d SNPs, %d individuals.', n_snps, n_ind)
 
-        # --- Pre-allocate SNP-major matrix: geno_matrix[snp_idx][ind_idx] ---
+        # --- Pre-allocate SNP-major matrix using numpy (much lower memory
+        #     than list[list[str]]) ---
         snp_order: list[str] = snp_info[snp_col].tolist()
         snp_to_index = {s: i for i, s in enumerate(snp_order)}
-        geno_matrix: list[list[str]] = [
-            ['NN'] * n_ind for _ in range(n_snps)
-        ]
+        geno_matrix = np.full((n_snps, n_ind), 'NN', dtype='U2')
+
+        # --- Build genotype Series without copying the whole DataFrame ---
+        geno_series = data[a1_col].astype(str) + data[a2_col].astype(str)
 
         # --- QC per SNP and fill matrix ---
-        for snp_name, grp in data.groupby(snp_col, sort=False):
+        grouped = data.groupby(snp_col, sort=False)
+        for snp_name, grp_idx in grouped.groups.items():
             snp_idx = snp_to_index[snp_name]
-            geno_list = grp['_geno'].tolist()
-            sample_ids = grp[sample_col].tolist()
+            geno_list = geno_series.iloc[grp_idx].tolist()
+            sample_ids = data[sample_col].iloc[grp_idx].tolist()
 
             # QC: check genotype counts
             geno_list = check_genotype_count(
@@ -439,9 +588,13 @@ class IlluminaReportConverter(Converter):
             for sample_id, geno in zip(sample_ids, geno_list):
                 ind_idx = ind_to_index[sample_id]
                 if geno == missing_geno or self.missing_genotype in geno:
-                    geno_matrix[snp_idx][ind_idx] = 'NN'
+                    pass  # already 'NN'
                 else:
-                    geno_matrix[snp_idx][ind_idx] = geno
+                    geno_matrix[snp_idx, ind_idx] = geno
+
+        # Free the temporary Series
+        del geno_series, grouped
+        gc.collect()
 
         # --- Build sorted output lines (chr 1–29, then by position) ---
         # Attach chr/pos to each SNP row for sorting
@@ -463,6 +616,10 @@ class IlluminaReportConverter(Converter):
         for c_int, p_int, snp_name, snp_idx in snp_rows:
             genos = '\t'.join(geno_matrix[snp_idx])
             geno_lines.append(f'{snp_name}\t{c_int}\t{p_int}\t{genos}')
+
+        # Free the numpy matrix
+        del geno_matrix
+        gc.collect()
 
         # --- Header ---
         samples_header = '\t'.join(individuals)
@@ -525,24 +682,29 @@ class IlluminaReportConverter(Converter):
         sex = str(self.default_sex)
         phe = str(self.default_phenotype)
 
+        # --- First pass: count SNPs to pre-allocate numpy array ---
         with open(input_path, 'r', encoding='utf-8') as in_f:
-            # --- Header: extract individual IDs ---
             header = in_f.readline().strip().split('\t')
             individuals = header[3:]  # skip snp, chr, pos
             n_ind = len(individuals)
-            logger.info('Found %d individuals.', n_ind)
+            snp_count = sum(1 for line in in_f if line.strip())
+        logger.info('Found %d individuals, %d SNPs.', n_ind, snp_count)
 
-            # Per-individual genotype accumulator
-            mk_id_dict: dict[str, list[str]] = {ind: [] for ind in individuals}
+        # --- Pre-allocate numpy arrays (much less memory than dict of lists) ---
+        # Store allele pairs as two U1 arrays: shape (n_ind, snp_count)
+        allele1_mat = np.full((n_ind, snp_count), '0', dtype='U1')
+        allele2_mat = np.full((n_ind, snp_count), '0', dtype='U1')
 
-            map_lines: list[str] = []
-            snp_count = 0
+        map_lines: list[str] = []
 
+        # --- Second pass: fill matrix ---
+        with open(input_path, 'r', encoding='utf-8') as in_f:
+            in_f.readline()  # skip header
+            snp_idx = 0
             for raw_line in in_f:
                 line = raw_line.strip()
                 if not line:
                     continue
-                snp_count += 1
                 parts = line.split('\t')
                 snp_id, chr_num, pos = parts[0], parts[1], parts[2]
                 genotypes = parts[3:]
@@ -550,14 +712,12 @@ class IlluminaReportConverter(Converter):
                 # --- Biallelic validation (warn and continue) ---
                 allele_check: set[str] = set()
                 for i, geno in enumerate(genotypes):
-                    if geno == missing_geno:
-                        formatted = '0\t0'
-                    else:
+                    if geno != missing_geno:
                         a1, a2 = geno[0], geno[1]
-                        formatted = f'{a1}\t{a2}'
+                        allele1_mat[i, snp_idx] = a1
+                        allele2_mat[i, snp_idx] = a2
                         allele_check.add(a1)
                         allele_check.add(a2)
-                    mk_id_dict[individuals[i]].append(formatted)
 
                 if len(allele_check) > 2:
                     logger.warning(
@@ -569,20 +729,31 @@ class IlluminaReportConverter(Converter):
                 # --- MAP line ---
                 chr_label = 'XY' if chr_num == 'PseudoX' else chr_num
                 map_lines.append(f'{chr_label}\t{snp_id}\t0\t{pos}')
+                snp_idx += 1
 
         logger.info('Processed %d SNPs.', snp_count)
 
         # --- Write MAP ---
         self._write_lines(map_lines, map_path, label='MAP')
+        del map_lines
 
-        # --- Write PED ---
-        ped_lines: list[str] = []
-        for ind in individuals:
-            geno_str = '\t'.join(mk_id_dict[ind])
-            ped_lines.append(
-                f'{ind}\t{ind}\t0\t0\t{sex}\t{phe}\t{geno_str}'
-            )
-        self._write_lines(ped_lines, ped_path, label='PED')
+        # --- Write PED (stream to disk — one individual at a time) ---
+        with open(ped_path, 'w', encoding='utf-8', newline='\n') as fh:
+            for i, ind in enumerate(individuals):
+                # Build genotype string from numpy rows
+                parts_list: list[str] = []
+                a1_row = allele1_mat[i]
+                a2_row = allele2_mat[i]
+                for j in range(snp_count):
+                    parts_list.append(a1_row[j])
+                    parts_list.append(a2_row[j])
+                geno_str = '\t'.join(parts_list)
+                fh.write(
+                    f'{ind}\t{ind}\t0\t0\t{sex}\t{phe}\t{geno_str}\n'
+                )
+        logger.info('Wrote PED file (%d lines): %s', n_ind, ped_path)
+        del allele1_mat, allele2_mat
+        gc.collect()
 
         # --- Write individual IDs ---
         self._write_ids(individuals, id_path)
@@ -626,33 +797,42 @@ class IlluminaReportConverter(Converter):
         input_path = Path(input_file)
         output_path = Path(output_file).with_suffix('.geno.txt')
 
-        # Read
+        # Read and convert
         if input_format == 'illumina':
             df = self.read_illumina_report(input_path)
+            # Convert — then free the DataFrame immediately
+            result = self.convert_to_geno(df)
+            del df
+            gc.collect()
+
+            # Write — stream lines to disk
+            n_lines = len(result['lines'])
+            n_individuals = len(result['individuals'])
+            with open(output_path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(result['header'] + '\n')
+                for line in result['lines']:
+                    fh.write(line + '\n')
+            del result
+            gc.collect()
         elif input_format == 'wide':
-            df = self.read_wide_format(input_path)
+            # Direct wide → geno path: avoids the expensive
+            # wide → long-format DataFrame → wide round-trip.
+            self._convert_wide_to_geno_file(input_path, output_path)
+            n_lines = -1  # not tracked in direct path
+            n_individuals = -1
         else:
             raise ValueError(
                 f'Unknown input_format \'{input_format}\'. '
                 f'Use \'illumina\' or \'wide\'.'
             )
 
-        # Convert
-        result = self.convert_to_geno(df)
-
-        # Write
-        with open(output_path, 'w', encoding='utf-8') as fh:
-            fh.write(result['header'] + '\n')
-            for line in result['lines']:
-                fh.write(line + '\n')
-
         elapsed = time.perf_counter() - start
         logger.info('Geno file conversion completed in %.2f seconds.', elapsed)
         logger.info(
             '  GENO: %s  (%d SNPs, %d individuals)',
             output_path,
-            len(result['lines']),
-            len(result['individuals']),
+            n_lines,
+            n_individuals,
         )
 
         return output_path
@@ -687,7 +867,7 @@ class IlluminaReportConverter(Converter):
 
     @staticmethod
     def _write_lines(lines: list[str], path: Path, *, label: str = '') -> None:
-        with open(path, 'w', encoding='utf-8') as fh:
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
             for line in lines:
                 fh.write(line + '\n')
         if label:
@@ -695,7 +875,7 @@ class IlluminaReportConverter(Converter):
 
     @staticmethod
     def _write_ids(individuals: list[str], path: Path) -> None:
-        with open(path, 'w', encoding='utf-8') as fh:
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
             for ind in individuals:
                 fh.write(ind + '\n')
         logger.info('Wrote ID file (%d individuals): %s', len(individuals), path)
