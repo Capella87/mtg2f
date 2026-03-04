@@ -10,8 +10,10 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
+from config import open_settings, write_settings
 
-def _get_base_directory() -> Path:
+
+def get_base_directory() -> Path:
     """Get the directory for storing downloaded files.
 
     In PyInstaller, __file__ points to a temporary directory.
@@ -27,33 +29,52 @@ def _get_base_directory() -> Path:
 
 def check(custom_path: str | None = None) -> dict:
     rt = {}
-    mtg2_path = check_mtg2(custom_path)
+
+    config = open_settings(get_base_directory() / 'config.toml')
+    mtg2_config_path = str(config.get('mtg2', {}).get('path', '')) or None
+    plink_config_path = str(config.get('plink', {}).get('path', '')) or None
+
+    mtg2_path = check_mtg2(config_path=mtg2_config_path)
     if not mtg2_path:
         logging.info('mtg2 is not found. Installing mtg2...')
         mtg2_path = install_mtg2()
 
     if mtg2_path:
-        rt['mtg2'] = mtg2_path
+        rt['mtg2'] = str(mtg2_path)
+        if str(mtg2_path) != mtg2_config_path:
+            config['mtg2']['path'] = str(mtg2_path)
+            logging.info('Saving mtg2 path to config: %s', mtg2_path)
     else:
         logging.error('mtg2 is not found and the installation failed.')
         raise RuntimeError('mtg2 is not found and the installation failed.')
 
-    plink_path = check_plink()
+    plink_path = check_plink(config_path=plink_config_path)
     if not plink_path:
         logging.error('plink is not found. Installing plink...')
         plink_path = install_plink()
 
     if plink_path:
-        rt['plink'] = plink_path
+        rt['plink'] = str(plink_path)
+        if str(plink_path) != plink_config_path:
+            config['plink']['path'] = str(plink_path)
+            logging.info('Saving plink path to config: %s', plink_path)
     else:
         logging.error('plink is not found and the installation failed.')
         raise RuntimeError('plink is not found and the installation failed.')
 
+    write_settings(config, get_base_directory() / 'config.toml')
     return rt
 
-def check_plink() -> str | None:
-    # 2. Try to type "plink" command
+def check_plink(config_path: str | None = None) -> str | None:
+    # 1. Try to find plink from the path stored in config
+    if config_path:
+        config_path_obj = Path(config_path)
+        if config_path_obj.exists() and config_path_obj.is_file():
+            logging.info('plink is found at %s from config.', config_path)
+            return str(config_path_obj.resolve())
+        logging.debug('Config plink path %s not found.', config_path)
 
+    # 2. Try to type "plink" command
     command = 'plink1.9' if platform.system() == 'Linux' else 'plink'
     plink_path = shutil.which(command)
     if plink_path:
@@ -62,7 +83,7 @@ def check_plink() -> str | None:
     logging.debug('plink is not found on PATH.')
 
     # 3. Try to find plink file on the executable file's folder
-    plink_path = _get_base_directory() / 'plink' if platform.system() != 'Windows' else _get_base_directory() / 'plink.exe'
+    plink_path = get_base_directory() / 'plink' if platform.system() != 'Windows' else get_base_directory() / 'plink.exe'
     if plink_path.exists() and plink_path.is_file():
         logging.info('plink is found at %s from the app folder.', plink_path)
         return str(plink_path)
@@ -92,7 +113,7 @@ def install_plink(url: str | None = None, custom_path: str | None = None) -> str
         timeout=100)
         logging.debug('Request headers: %s', file_response.request.headers)
         file_response.raise_for_status()
-        basedir = _get_base_directory() if not custom_path else pathlib.Path(custom_path).parent.resolve()
+        basedir = get_base_directory() if not custom_path else pathlib.Path(custom_path).parent.resolve()
         download_path = basedir / 'plink.zip' if not custom_path else custom_path
         with open(download_path, 'wb') as f:
             f.write(file_response.content)
@@ -114,16 +135,15 @@ def install_plink(url: str | None = None, custom_path: str | None = None) -> str
 
     return basedir / 'plink'
 
-def check_mtg2(custom_path: str | None = None) -> str | None:
+def check_mtg2(config_path: str | None = None) -> str | None:
 
-    # Find custom_path (Includes binary) first
-    if custom_path:
-        custom_path_obj = Path(custom_path)
-        if custom_path_obj.exists() and custom_path_obj.is_file():
-            logging.info('mtg2 is found on %s.', custom_path)
-            return str(custom_path_obj.resolve())
-        else:
-            logging.debug('Custom mtg2 path %s not found.', custom_path)
+    # 1. Try to find mtg2 from the path stored in config
+    if config_path:
+        config_path_obj = Path(config_path)
+        if config_path_obj.exists() and config_path_obj.is_file():
+            logging.info('mtg2 is found at %s from config.', config_path)
+            return str(config_path_obj.resolve())
+        logging.debug('Config mtg2 path %s not found.', config_path)
 
     # 2. Try to type "mtg2" command
     mtg2_path = shutil.which('mtg2')
@@ -133,7 +153,7 @@ def check_mtg2(custom_path: str | None = None) -> str | None:
     logging.debug('mtg2 is not found on PATH.')
 
     # 3. Try to find mtg2 file on the executable file's folder
-    mtg2_path = _get_base_directory() / 'mtg2'
+    mtg2_path = get_base_directory() / 'mtg2'
     if mtg2_path.exists() and mtg2_path.is_file():
         logging.info('mtg2 is found at %s from the app folder.', mtg2_path)
         return str(mtg2_path)
@@ -159,7 +179,7 @@ def install_mtg2(url: str | None = None, custom_path: str | None = None) -> Path
         timeout=100)
         logging.debug('Request headers: %s', file_response.request.headers)
         file_response.raise_for_status()
-        basedir = _get_base_directory() if not custom_path else pathlib.Path(custom_path).parent.resolve()
+        basedir = get_base_directory() if not custom_path else pathlib.Path(custom_path).parent.resolve()
         download_path = basedir / 'mtg2.zip' if not custom_path else custom_path
         with open(download_path, 'wb') as f:
             f.write(file_response.content)
