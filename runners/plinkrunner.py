@@ -46,11 +46,14 @@ class PlinkRunner:
                 logging.debug('User provided PLINK tasks: %s. the default tasks are overridden.', tasks)
             else:
                 tasks = [
-                    [plink_cmd, '--file', self.name_prefix, '--make-bed', '--out', f'{self.name_prefix}_binary', '--cow'],
-                    [plink_cmd, '--bfile', f'{self.name_prefix}_binary', '--maf', '0.05', '--mind', '0.5', '--geno', '0.2',
-                    '--hwe', '0.000001', '--recode', '--out', f'{self.name_prefix}_second', '--cow'],
-                    [plink_cmd, '--file', f'{self.name_prefix}_second', '--make-bed', '--out', f'{self.output_name_prefix}', '--cow'],
-                    [plink_cmd, '--bfile', f'{self.output_name_prefix}', '--recode', '--out', f'{self.output_name_prefix}_output', '--cow']
+                    # PLINK QC
+                    [plink_cmd, '--file', self.name_prefix, '--make-bed', '--out', f'{self.name_prefix}_binary', '--cow', '--allow-no-sex'],
+                    [plink_cmd, '--bfile', f'{self.name_prefix}_binary', '--maf', '0.05', '--mind', '0.5', '--geno', '0.2', '--hwe', '0.000001', '--make-bed', '--out', f'{self.output_name_prefix}', '--cow', '--allow-no-sex'],
+
+                    # GRM conversion
+                    [plink_cmd, '--bfile', f'{self.output_name_prefix}', '--make-rel', 'square', '--out', f'{self.output_name_prefix}_grm_plink', '--cow', '--allow-no-sex'],
+                    [plink_cmd, '--bfile', f'{self.output_name_prefix}', '--make-grm-gz', '--out', f'{self.output_name_prefix}_grm_gcta', '--cow', '--allow-no-sex'],
+                    [plink_cmd, '--bfile', f'{self.output_name_prefix}', '--make-grm-bin', '--out', f'{self.output_name_prefix}_grm_gcta_bin', '--cow', '--allow-no-sex'],
                 ]
 
             for task in tasks:

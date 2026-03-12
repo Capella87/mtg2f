@@ -139,8 +139,8 @@ def prepare(args: argparse.Namespace) -> None:
                                output_name_prefix=args.output)
     plink_runner.run()
 
-    mtg2_runner = Mtg2Runner(name_prefix=args.input, mtg2_path=dep_paths['mtg2'], working_dir='.', output_name_prefix=args.output)
-    mtg2_runner.create_grm_file()
+    # mtg2_runner = Mtg2Runner(name_prefix=args.input, mtg2_path=dep_paths['mtg2'], working_dir='.', output_name_prefix=args.output)
+    # mtg2_runner.create_grm_file()
     return
 
 
