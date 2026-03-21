@@ -197,6 +197,10 @@ def install_mtg2(url: str | None = None, custom_path: str | None = None) -> Path
     with zipfile.ZipFile(download_path, 'r') as zip_ref:
         zip_ref.extractall(basedir)
     download_path.unlink()
+    # Add chmod for the mtg2 executable file on Linux
+    if platform.system() == 'Linux':
+        mtg2_executable = basedir / 'mtg2'
+        mtg2_executable.chmod(mtg2_executable.stat().st_mode | 0o111)
     logging.info('mtg2 zip file is uncompressed and successfully configured.')
 
     return basedir / 'mtg2'
