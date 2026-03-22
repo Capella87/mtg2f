@@ -144,6 +144,10 @@ def prepare(args: argparse.Namespace) -> None:
     return
 
 
+def integrate(arts: argparse.Namespace) -> None:
+    pass
+
+
 def convert(args: argparse.Namespace) -> None:
     setup_logging(args.verbose, log_file=args.log)
     converter = IlluminaReportConverter(
@@ -173,6 +177,8 @@ def convert(args: argparse.Namespace) -> None:
     logging.info('Conversion to plink files is completed. PLINK output files:')
     for key, path in plink_format_conversion_result.items():
         logging.info('%3s: %s', key, path)
+
+    logging.info('int')
 
 def check(args: argparse.Namespace) -> None:
     setup_logging(args.verbose, log_file=args.log)

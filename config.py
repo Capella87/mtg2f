@@ -19,8 +19,13 @@ class DefaultConfig:
             'version': '1.9',
             'executable': 'plink1.9' if sys.platform == 'linux' else 'plink.exe',
         }
+        self.gcta = {
+            'executable': 'gcta',
+        }
         self.mtg2['path'] = str(basepath / 'dist' / self.mtg2['executable'])
         self.plink['path'] = str(basepath / 'dist' / self.plink['executable'])
+        self.gcta['path'] = str(basepath / 'dist' / self.gcta['executable'])
+
 
 
 def open_settings(path: Path) -> TOMLDocument:
@@ -31,6 +36,7 @@ def open_settings(path: Path) -> TOMLDocument:
         configdoc = TOMLDocument()
         configdoc['mtg2'] = conf.mtg2
         configdoc['plink'] = conf.plink
+        configdoc['gcta'] = conf.gcta
 
         logger.debug('Creating default configuration file at %s with content:\n%s', path, dumps(configdoc))
         with open(path, 'w', encoding='utf-8', newline='\n') as f:

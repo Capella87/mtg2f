@@ -33,6 +33,7 @@ def check(custom_path: str | None = None) -> dict:
     config = open_settings(get_base_directory() / 'config.toml')
     mtg2_config_path = str(config.get('mtg2', {}).get('path', '')) or None
     plink_config_path = str(config.get('plink', {}).get('path', '')) or None
+    gcta_config_path = str(config.get('gcta', {}).get('path', '')) or None
 
     mtg2_path = check_mtg2(config_path=mtg2_config_path)
     if not mtg2_path:
@@ -61,6 +62,20 @@ def check(custom_path: str | None = None) -> dict:
     else:
         logging.error('plink is not found and the installation failed.')
         raise RuntimeError('plink is not found and the installation failed.')
+
+    gcta_path = check_gcta(config_path=gcta_config_path)
+    if not gcta_path:
+        logging.info('gcta is not found. Installing gcta...')
+        gcta_path = install_gcta()
+
+    if gcta_path:
+        rt['gcta'] = str(gcta_path)
+        if str(gcta_path) != gcta_config_path:
+            config['gcta']['path'] = str(gcta_path)
+            logging.info('Saving gcta path to config: %s', gcta_path)
+    else:
+        logging.error('gcta is not found and the installation failed.')
+        raise RuntimeError('gcta is not found and the installation failed.')
 
     write_settings(config, get_base_directory() / 'config.toml')
     return rt
@@ -134,6 +149,62 @@ def install_plink(url: str | None = None, custom_path: str | None = None) -> str
     logging.info('plink zip file is uncompressed and successfully configured.')
 
     return basedir / 'plink'
+
+def check_gcta(config_path: str | None = None) -> str | None:
+    # 1. Try to find gcta from the path stored in config
+    if config_path:
+        config_path_obj = Path(config_path)
+        if config_path_obj.exists() and config_path_obj.is_file():
+            logging.info('gcta is found at %s from config.', config_path)
+            return str(config_path_obj.resolve())
+        logging.debug('Config gcta path %s not found.', config_path)
+
+    # 2. Try to type "gcta" command
+    gcta_path = shutil.which('gcta')
+    if gcta_path:
+        logging.info('gcta is found at %s from PATH.', gcta_path)
+        return gcta_path
+    logging.debug('gcta is not found on PATH.')
+
+    # 3. Try to find gcta file on the executable file's folder
+    gcta_path = get_base_directory() / 'gcta' if platform.system() != 'Windows' else get_base_directory() / 'gcta.exe'
+    if gcta_path.exists() and gcta_path.is_file():
+        logging.info('gcta is found at %s from the app folder.', gcta_path)
+        return str(gcta_path)
+    logging.debug('gcta is not found on the app folder.')
+
+    return None
+
+def install_gcta(url: str | None = None, custom_path: str | None = None) -> str | None:
+    url = 'https://github.com/jianyangqt/gcta/releases/download/v1.94.1/gcta-1.94.1-linux-x86_64-static'
+    try:
+        session = _get_session_with_retries()
+
+        logging.info('Downloading gcta from %s ...', url)
+        file_response = session.get(url, stream=True, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0'
+        },
+        timeout=100)
+        logging.debug('Request headers: %s', file_response.request.headers)
+        file_response.raise_for_status()
+        basedir = get_base_directory() if not custom_path else pathlib.Path(custom_path).parent.resolve()
+        download_path = basedir / 'gcta' if not custom_path else custom_path
+        with open(download_path, 'wb') as f:
+            f.write(file_response.content)
+        logging.info('gcta file is downloaded.')
+    except requests.exceptions.Timeout:
+        logging.error('Download request time out. try again later, or download manually from %s', url)
+        return None
+    except requests.exceptions.RequestException as e:
+        logging.error('Error downloading gcta: %s', e)
+        return None
+
+    if platform.system() == 'Linux':
+        gcta_executable = basedir / 'gcta'
+        gcta_executable.chmod(gcta_executable.stat().st_mode | 0o111)
+
+    return basedir / 'gcta'
+
 
 def check_mtg2(config_path: str | None = None) -> str | None:
 
