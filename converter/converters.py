@@ -678,7 +678,7 @@ class IlluminaReportConverter(Converter):
         ped_path = prefix.with_suffix('.ped')
         id_path = Path(f'{prefix}_id.txt')
 
-        missing_geno = 'NN'  # geno.txt always uses NN for missing
+        missing_geno = 'NN'# geno.txt always uses NN for missing
         sex = str(self.default_sex)
         phe = str(self.default_phenotype)
 
@@ -760,8 +760,8 @@ class IlluminaReportConverter(Converter):
 
         elapsed = time.perf_counter() - start
         logger.info('File conversion completed in %.2f seconds.', elapsed)
-        logger.info('  MAP: %s  (%d SNPs)', map_path, snp_count)
-        logger.info('  PED: %s  (%d individuals)', ped_path, n_ind)
+        logger.info('MAP: %s  (%d SNPs)', map_path, snp_count)
+        logger.info('PED: %s  (%d individuals)', ped_path, n_ind)
 
         return {
             'map': map_path,
@@ -829,7 +829,7 @@ class IlluminaReportConverter(Converter):
         elapsed = time.perf_counter() - start
         logger.info('Geno file conversion completed in %.2f seconds.', elapsed)
         logger.info(
-            '  GENO: %s  (%d SNPs, %d individuals)',
+            'GENO: %s  (%d SNPs, %d individuals)',
             output_path,
             n_lines,
             n_individuals,

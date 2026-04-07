@@ -2,9 +2,16 @@ import argparse
 import logging
 from pathlib import Path
 import platform
+import sys
 
 from converter import IlluminaReportConverter
 from check import check as check_dependencies
+from exceptions import PipelineError
+from pipelines.comparer import PrunedComparer
+from pipelines.filter import GenoFileFilter
+from pipelines.grm import GRMCreation
+from pipelines.merge import MergeHerdData, MergePhenotypes
+from pipelines.mtg2 import Mtg2Analysis
 from runners.mtg2runner import Mtg2Runner
 from runners.plinkrunner import PlinkRunner
 
@@ -115,37 +122,81 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                                          parents=[common_option_parser])
     check_parser.set_defaults(func=check)
 
-    prepare_parser = subparsers.add_parser('prepare',
+    run_parser = subparsers.add_parser('run',
                                            help='Run PLINK QC pipeline for the converted files.',
                                            parents=[common_option_parser])
-    prepare_parser.add_argument('input',
+    run_parser.add_argument('input',
                                 help='Input prefix of the converted PLINK files to run QC on (e.g. <prefix>).')
-    prepare_parser.add_argument('output',
+    run_parser.add_argument('output',
                                 help='Output prefix of the converted PLINK files to run QC on (e.g. <prefix>_final). In default, the output files will be saved with the same prefix as the input files with "_final" suffix.',
                                 default=None)
+    run_parser.add_argument('--ref',
+                            help='Reference herd data prefix. Required.')
+    run_parser.add_argument('--pheno',
+                            help='Phenotype of reference herd FAM file path. Required.')
+    run_parser.add_argument('--cc',
+                            help='Classification covariate file path. Required.')
+    run_parser.add_argument('--qc',
+                            help='QC covariate file path. Required.')
 
-    prepare_parser.set_defaults(func=prepare)
+    run_parser.set_defaults(func=run)
 
 
 
     return parser.parse_args(argv)
 
 
-def prepare(args: argparse.Namespace) -> None:
+def run(args: argparse.Namespace) -> None:
     setup_logging(args.verbose, log_file=args.log)
     dep_paths = check_dependencies(custom_path=None)
 
+    # Step 3
     plink_runner = PlinkRunner(name_prefix=args.input, plink_path=dep_paths['plink'], working_dir='.',
-                               output_name_prefix=args.output)
+                               output_name_prefix=f'{args.input}_qc')
     plink_runner.run()
 
-    # mtg2_runner = Mtg2Runner(name_prefix=args.input, mtg2_path=dep_paths['mtg2'], working_dir='.', output_name_prefix=args.output)
-    # mtg2_runner.create_grm_file()
+    # Step 4
+    comparer = PrunedComparer(exp_prefix=args.input,
+                              qc_prefix=f'{args.input}_qc',
+                              id_path=f'{args.input}_id.txt')
+    prune_out_ids, prune_out_snps, all_ids, all_snps = comparer.run()
+
+    # Step 5
+    filt = GenoFileFilter(geno_file=args.input, prune_out_ids=prune_out_ids, prune_out_snps=prune_out_snps, all_ids=all_ids, all_snps=all_snps)
+    _ = filt.filter()
+
+    # Step 6
+    herd_merger = MergeHerdData(plink_path=dep_paths['plink'])
+    merged = herd_merger.run(qc_prefix=f'{args.input}_qc', ref_prefix=args.ref)
+
+    # Step 7
+    grm_creation = GRMCreation(gcta_path=dep_paths['gcta'])
+    grm_prefix = grm_creation.run(merged_prefix=merged)
+
+
+    phenotype_merger = MergePhenotypes()
+
+    # Step 8
+    _ = phenotype_merger.run(grm_prefix=grm_prefix,
+                            phenotype_file=args.pheno,
+                            cc_cov_file_path=args.cc,
+                            qc_cov_file_path=args.qc)
+
+    mtg2 = Mtg2Analysis(mtg2_path=dep_paths['mtg2'],
+                        num_traits=4)
+
+    # Step 9
+    multivariate_result = mtg2.run_reml(grm_prefix=grm_prefix,
+                                        cc_cov_file_path=args.cc,
+                                        qc_cov_file_path=args.qc)
+
+    # Step 10
+    mtg2.run_blup_and_gebv(grm_prefix=grm_prefix,
+                           cc_cov_file_path=args.cc,
+                           qc_cov_file_path=args.qc,
+                           multivariate_result_path=multivariate_result,
+                           prediction_result_prefix=args.output + '_prediction_results.csv')
     return
-
-
-def integrate(arts: argparse.Namespace) -> None:
-    pass
 
 
 def convert(args: argparse.Namespace) -> None:
@@ -195,7 +246,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.command is None:
         parse_args(['--help'])
         return
-    args.func(args)
+
+    try:
+        args.func(args)
+    except PipelineError as e:
+        logging.error('Pipeline halted: %s', e)
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
