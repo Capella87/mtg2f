@@ -12,7 +12,6 @@ from pipelines.filter import GenoFileFilter
 from pipelines.grm import GRMCreation
 from pipelines.merge import MergeHerdData, MergePhenotypes
 from pipelines.mtg2 import Mtg2Analysis
-from runners.mtg2runner import Mtg2Runner
 from runners.plinkrunner import PlinkRunner
 
 
